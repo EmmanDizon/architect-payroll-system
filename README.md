@@ -362,7 +362,6 @@ sequenceDiagram
     participant Step as Processing Step Lambda
     participant DB as PostgreSQL
     participant FailureQ as Processing Failure Queue
-    participant S3Failed as S3 Failed Prefix/Bucket
     participant Ops as Operations Team
 
     SFN->>Step: Execute processing step
@@ -378,7 +377,6 @@ sequenceDiagram
     Step--xSFN: Error returned
 
     SFN->>DB: Update file status as FAILED
-    SFN->>S3Failed: Mark or copy file to failed location
     SFN->>FailureQ: Send failure details
     FailureQ-->>Ops: Alert/investigation trigger
 ```
