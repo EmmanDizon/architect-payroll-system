@@ -274,3 +274,146 @@ Key decisions:
 - Lambda is used for event-driven processing.
 - Failure queues support operational investigation and reprocessing.
 - PostgreSQL stores metadata, processing progress, and delivery status.
+
+# Sequence Diagrams
+
+## 1. File Ingestion Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Customer as External Customer/System
+    participant Transfer as AWS Transfer Family
+    participant S3 as S3 Landing Bucket
+    participant SQS as Payment Trigger Queue
+    participant Trigger as Payment Workflow Trigger Lambda
+    participant SFN as Step Functions
+
+    Customer->>Transfer: Upload payroll/payment file via SFTP/FTPS
+    Transfer->>S3: Store uploaded file
+    S3->>SQS: Send file-created event
+    SQS->>Trigger: Trigger Lambda with file message
+    Trigger->>SFN: Start workflow execution
+    SFN-->>Trigger: Execution started
+    Trigger-->>SQS: Message processed successfully
+```
+
+---
+
+## 2. Payment Processing Success Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SFN as Step Functions
+    participant Validate as Validate File Lambda
+    participant Parse as Parse/Transform Lambda
+    participant Calculate as Calculate Payroll Lambda
+    participant Generate as Generate Bank File Lambda
+    participant DB as PostgreSQL
+    participant S3Out as S3 Generated Bank Files
+    participant UploadQ as Upload Bank Files Queue
+
+    SFN->>Validate: Validate file
+    Validate->>DB: Save validation status
+    Validate-->>SFN: Validation successful
+
+    SFN->>Parse: Parse and transform file data
+    Parse->>DB: Save parsing progress
+    Parse-->>SFN: Parsing successful
+
+    SFN->>Calculate: Perform payroll/payment calculations
+    Calculate->>DB: Save calculation progress
+    Calculate-->>SFN: Calculation successful
+
+    SFN->>Generate: Generate bank payment file
+    Generate->>S3Out: Save generated bank file
+    Generate->>DB: Save generated status
+    Generate->>UploadQ: Send upload request
+    Generate-->>SFN: Bank file generated
+```
+
+---
+
+## 3. Payment Processing Failure Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SFN as Step Functions
+    participant Step as Processing Step Lambda
+    participant DB as PostgreSQL
+    participant FailureQ as Processing Failure Queue
+    participant S3Failed as S3 Failed Prefix/Bucket
+    participant Ops as Operations Team
+
+    SFN->>Step: Execute processing step
+    Step--xSFN: Error returned
+
+    SFN->>Step: Retry attempt 1
+    Step--xSFN: Error returned
+
+    SFN->>Step: Retry attempt 2
+    Step--xSFN: Error returned
+
+    SFN->>Step: Retry attempt 3
+    Step--xSFN: Error returned
+
+    SFN->>DB: Update file status as FAILED
+    SFN->>S3Failed: Mark or copy file to failed location
+    SFN->>FailureQ: Send failure details
+    FailureQ-->>Ops: Alert/investigation trigger
+```
+
+---
+
+## 4. Bank SFTP Upload Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UploadQ as Upload Bank Files Queue
+    participant UploadLambda as Upload to External SFTP Lambda
+    participant S3Out as S3 Generated Bank Files
+    participant Bank as External Bank SFTP
+    participant DB as PostgreSQL
+    participant UploadDLQ as Upload Failure DLQ
+    participant Ops as Operations Team
+
+    UploadQ->>UploadLambda: Trigger upload request
+    UploadLambda->>S3Out: Read generated bank file
+    UploadLambda->>Bank: Upload file via SFTP
+
+    alt Upload successful
+        Bank-->>UploadLambda: Upload accepted
+        UploadLambda->>DB: Update status as SENT
+        UploadLambda-->>UploadQ: Message processed successfully
+    else Upload failed after retries
+        UploadLambda->>DB: Update status as DELIVERY_FAILED
+        UploadLambda--xUploadQ: Return failure
+        UploadQ->>UploadDLQ: Move message after max receives
+        UploadDLQ-->>Ops: Alert/investigation trigger
+    end
+```
+
+---
+
+## 5. Reprocessing Failed Files Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Ops as Operations Team
+    participant FailureQ as Processing Failure Queue
+    participant Reprocess as Reprocess Lambda/Script
+    participant S3 as S3 Landing Bucket
+    participant SFN as Step Functions
+    participant DB as PostgreSQL
+
+    Ops->>FailureQ: Review failed file message
+    Ops->>Reprocess: Approve or trigger reprocessing
+    Reprocess->>S3: Read original file reference
+    Reprocess->>SFN: Start new workflow execution
+    Reprocess->>DB: Save reprocessing attempt
+    SFN-->>DB: Continue normal status updates
+```
