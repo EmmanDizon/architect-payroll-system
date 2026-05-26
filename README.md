@@ -415,23 +415,4 @@ sequenceDiagram
 ```
 
 ---
-
-## 5. Reprocessing Failed Files Sequence
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Ops as Operations Team
-    participant FailureQ as Processing Failure Queue
-    participant Reprocess as Reprocess Lambda/Script
-    participant S3 as S3 Landing Bucket
-    participant SFN as Step Functions
-    participant DB as PostgreSQL
-
-    Ops->>FailureQ: Review failed file message
-    Ops->>Reprocess: Approve or trigger reprocessing
-    Reprocess->>S3: Read original file reference
-    Reprocess->>SFN: Start new workflow execution
-    Reprocess->>DB: Save reprocessing attempt
-    SFN-->>DB: Continue normal status updates
 ```
