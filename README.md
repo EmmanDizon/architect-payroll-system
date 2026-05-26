@@ -177,7 +177,7 @@ error reason
 timestamp
 ```
 
-This allows the operations team to investigate and reprocess the file if needed.
+This allows to investigate and reprocess the file if needed.
 
 ---
 
