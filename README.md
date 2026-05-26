@@ -89,7 +89,7 @@ The requirement says there should be no customer-side changes.
 
 Because this is a file-based payment system, external customers or systems are likely already sending files using SFTP or FTPS.
 
-AWS Transfer Family allows us to preserve the same file transfer protocol while modernizing the backend implementation.
+AWS Transfer Family allows us to preserve the same file transfer protocol
 
 ```text
 Customer keeps using SFTP/FTPS
