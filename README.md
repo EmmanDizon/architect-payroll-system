@@ -319,12 +319,30 @@ sequenceDiagram
     Validate-->>SFN: Validation successful
 
     SFN->>Parse: Parse and transform file data
+
+    alt Parse step temporary failure
+        Parse--xSFN: Temporary error
+        SFN->>Parse: Retry attempt 1
+        Parse--xSFN: Temporary error
+        SFN->>Parse: Retry attempt 2
+        Parse-->>SFN: Parsing successful
+    else Parse successful immediately
+        Parse-->>SFN: Parsing successful
+    end
+
     Parse->>DB: Save parsing progress
-    Parse-->>SFN: Parsing successful
 
     SFN->>Calculate: Perform payroll/payment calculations
+
+    alt Calculation temporary failure
+        Calculate--xSFN: Temporary error
+        SFN->>Calculate: Retry attempt 1
+        Calculate-->>SFN: Calculation successful
+    else Calculation successful immediately
+        Calculate-->>SFN: Calculation successful
+    end
+
     Calculate->>DB: Save calculation progress
-    Calculate-->>SFN: Calculation successful
 
     SFN->>Generate: Generate bank payment file
     Generate->>S3Out: Save generated bank file
