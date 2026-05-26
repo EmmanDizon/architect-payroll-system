@@ -82,15 +82,6 @@ A payment processing system that receives files from various resources, validate
 
 This system receives payroll/payment files from external sources, validates and processes them, generates bank payment instruction files, and uploads those files to an external bank SFTP service.
 
-The design focuses on:
-
-- Backward compatibility
-- No data loss
-- Reliable processing
-- Retry and failure handling
-- Auditability
-- Simple operational support
-
 
 ## 1. Why AWS Transfer Family to S3?
 
