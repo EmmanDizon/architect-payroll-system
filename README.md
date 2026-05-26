@@ -72,48 +72,214 @@ A payment processing system that receives files from various resources, validate
 
 ---
 
-![Payroll System Diagram](payroll.png)
+<img width="2440" height="2603" alt="payroll" src="https://github.com/user-attachments/assets/c47f3d52-7c18-4809-b990-e73a9cf8900a" />
 
 ---
 
-## Architecture Reasoning
+# Architecture Reasoning
 
-### Azure Function (File Receiver)
+## Overview
 
-Used as the entry point for incoming files. It receives files from external providers, performs basic validation such as file size and format, stores the raw file in Azure Storage, saves metadata and processing status in Azure SQL, and sends a message to Service Bus to trigger downstream processing.
+This system receives payroll/payment files from external sources, validates and processes them, generates bank payment instruction files, and uploads those files to an external bank SFTP service.
 
-### Why Azure Functions instead of App Service
+The design focuses on:
 
-Azure Functions were chosen because the system is fully automatic and event-driven. Processing only happens when files are received or when queue messages are triggered. There is no user interface and no need to keep an application server running continuously. This makes it more cost-efficient and reduces operational overhead compared to App Service.
+- Backward compatibility
+- No data loss
+- Reliable processing
+- Retry and failure handling
+- Auditability
+- Simple operational support
 
-### Tradeoff (Azure Functions)
 
-Azure Functions can experience cold starts after periods of inactivity. This is acceptable for this system because the requirement is to process files within one minute, not instant response. Since the system is queue-based, small delays do not impact the overall processing flow.
+## 1. Why AWS Transfer Family to S3?
 
-### Azure Storage (File Storage)
+The requirement says there should be no customer-side changes.
 
-Used to store both raw input files and processed output files. It ensures that files are safely persisted before and after each processing stage. It also avoids passing large file contents through queues, which improves efficiency and keeps services loosely coupled.
+Because this is a file-based payment system, external customers or systems are likely already sending files using SFTP or FTPS.
 
-### Azure SQL (Metadata and Status Tracking)
+AWS Transfer Family allows us to preserve the same file transfer protocol while modernizing the backend implementation.
 
-Used to store file metadata, correlation IDs, and processing status. It provides a structured way to track each file throughout the entire processing pipeline.
+```text
+Customer keeps using SFTP/FTPS
+AWS stores uploaded files in S3
+Internal processing starts from S3
+```
 
-### Service Bus (Messaging)
+S3 is used as the landing storage because it is durable, scalable, and suitable for retaining original files for audit and reprocessing.
 
-Used to connect different stages of the pipeline. It ensures reliable message delivery between components and supports retries and failure handling. This is important because the system cannot tolerate data loss.
+---
 
-### Why Service Bus instead of a simpler queue
+## 2. Why SQS Before the Payment Workflow Trigger?
 
-Service Bus was chosen because it provides stronger reliability features such as retries and dead-lettering. These are important for financial systems where every message must be processed safely.
+SQS is used between S3 and the workflow trigger to decouple file upload from file processing.
 
-### File Formatter Function
+```text
+S3 Upload
+   ↓
+SQS Queue
+   ↓
+Lambda Trigger
+   ↓
+Step Functions
+```
 
-Used to validate and normalize incoming files into a standard internal format. This simplifies downstream processing by ensuring that all files follow the same structure.
+This gives the system:
 
-### Calculation Function
+- Buffering
+- Retry control
+- Better failure handling
+- DLQ support
+- Protection from temporary Lambda or Step Functions issues
 
-Used to perform business logic and calculations on normalized data. It reads the processed file, applies required computations, stores the results, updates the status, and triggers the next step in the pipeline.
+If the workflow trigger fails, the message can be retried. If it still fails after multiple attempts, it can go to a trigger DLQ.
 
-### Bank Sender Function
+This prevents uploaded files from being missed.
 
-Used to generate bank instruction files and send them to the external banking system. This separates bank-specific logic from earlier processing stages and keeps the processing pipeline modular.
+---
+
+## 3. Step Functions Retry and Failure Handling
+
+Each processing step inside Step Functions can have its own retry and catch logic.
+
+Example:
+
+```text
+Validate File
+   ↓
+Parse / Transform
+   ↓
+Calculate Payroll
+   ↓
+Generate Bank File
+   ↓
+Return Result
+```
+
+If a step fails:
+
+```text
+Step failed
+   ↓
+Retry x times
+   ↓
+Still failed
+   ↓
+Catch error
+   ↓
+Send failure details to processing failure queue
+   ↓
+Update status as FAILED
+   ↓
+Keep original file in S3 for reprocessing
+```
+
+The original file is not lost because it remains stored in S3.
+
+The failure queue contains metadata such as:
+
+```text
+file id
+S3 bucket/key
+failed step
+error reason
+timestamp
+```
+
+This allows the operations team to investigate and reprocess the file if needed.
+
+---
+
+## 4. Why Step Functions?
+
+Step Functions is used because payment processing is a workflow with multiple ordered steps.
+
+It is better than chaining many Lambda-to-queue-to-Lambda stages because Step Functions provides a clear view of the full process.
+
+Benefits:
+
+- Clear workflow orchestration
+- Retry per step
+- Catch/failure handling per step
+- Easier troubleshooting
+- Easier audit trail
+- Better visibility of where the process failed
+
+This is important for payment systems because the system must clearly track whether a file was validated, processed, generated, failed, or sent.
+
+---
+
+## 5. Why Queue Before Uploading to External SFTP?
+
+Generated bank files are placed in S3 first, then sent to an upload queue.
+
+```text
+Generated Bank File
+   ↓
+S3
+   ↓
+SQS Upload Queue
+   ↓
+Upload Lambda
+   ↓
+External Bank SFTP
+```
+
+The queue is useful because external SFTP services can fail or become unavailable.
+
+Common issues include:
+
+- Bank SFTP downtime
+- Network timeout
+- Authentication issue
+- Temporary connection failure
+
+With SQS, the system can retry the upload safely.
+
+If the upload still fails after multiple attempts, the message can go to an upload failure DLQ for operations support.
+
+This helps ensure bank files are not silently lost.
+
+---
+
+## 6. Why Lambda Over Container?
+
+Lambda is a good fit for this system because the workload is event-driven and relatively small.
+
+Based on the requirements:
+
+- 500 files per day
+- Average 1MB file size
+- Around 1 minute processing time per file
+- No user interface
+- Fully automatic workflow
+
+Lambda fits well because it only runs when there is work to do.
+
+Benefits:
+
+- No server management
+- Automatic scaling
+- Cost-effective for low to moderate volume
+- Good integration with S3, SQS, and Step Functions
+- Simpler operational overhead
+
+A container-based service such as ECS would be more appropriate if the system needed long-running processing, heavy CPU usage, large file processing, custom runtime dependencies, or always-on workers.
+
+For this case, Lambda is simpler and sufficient.
+
+---
+
+## Summary
+
+This architecture uses AWS managed services to create a reliable file-based payment processing system.
+
+Key decisions:
+
+- AWS Transfer Family preserves existing SFTP/FTPS integrations.
+- S3 stores original and generated files durably.
+- SQS provides buffering, retries, and DLQ support.
+- Step Functions orchestrates the payment workflow.
+- Lambda is used for event-driven processing.
+- Failure queues support operational investigation and reprocessing.
+- PostgreSQL stores metadata, processing progress, and delivery status.
